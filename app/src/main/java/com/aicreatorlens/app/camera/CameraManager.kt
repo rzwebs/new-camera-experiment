@@ -116,7 +116,7 @@ class CameraManager(private val context: Context) {
             captureRequestBuilder.set(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_AUTO)
 
             log("step 6: creating CaptureSession...")
-            captureSession = camera.createCaptureSession(
+            camera.createCaptureSession(
                 listOf(surface),
                 object : CameraCaptureSession.StateCallback() {
                     override fun onConfigured(session: CameraCaptureSession) {

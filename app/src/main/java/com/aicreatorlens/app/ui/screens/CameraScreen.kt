@@ -8,9 +8,10 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -76,16 +77,14 @@ fun CameraScreen(
             DebugLog.log("APP", ">>> SurfaceTexture callback FIRED")
             if (!hasPermission) {
                 DebugLog.log("APP", "BLOCKED: no permission yet")
-                return@remember
-            }
-            if (cameraStarted) {
+            } else if (cameraStarted) {
                 DebugLog.log("APP", "BLOCKED: camera already started")
-                return@remember
+            } else {
+                DebugLog.log("APP", ">>> Calling cameraManager.startCamera()")
+                cameraManager.startCamera(surfaceTexture)
+                cameraStarted = true
+                DebugLog.log("APP", "<<< cameraManager.startCamera() returned")
             }
-            DebugLog.log("APP", ">>> Calling cameraManager.startCamera()")
-            cameraManager.startCamera(surfaceTexture)
-            cameraStarted = true
-            DebugLog.log("APP", "<<< cameraManager.startCamera() returned")
         }
     }
 

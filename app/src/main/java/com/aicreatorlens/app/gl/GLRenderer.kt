@@ -3,7 +3,7 @@ package com.aicreatorlens.app.gl
 import android.graphics.SurfaceTexture
 import android.opengl.GLES11Ext
 import android.opengl.GLES30
-import android.opengl.EGL14
+import android.os.SystemClock
 import android.util.Log
 import com.aicreatorlens.app.engine.CreatorEngine
 import com.aicreatorlens.app.ui.screens.DebugLog
