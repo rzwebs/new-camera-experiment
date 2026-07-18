@@ -232,9 +232,9 @@ class ShaderPipeline {
         GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
         GLES30.glUseProgram(comparisonProgram)
 
-        // Set attributes
-        val posLoc = getLoc(comparisonProgram, "aPosition")
-        val texLoc = getLoc(comparisonProgram, "aTexCoord")
+        // Set attributes — MUST use glGetAttribLocation for vertex attributes
+        val posLoc = GLES30.glGetAttribLocation(comparisonProgram, "aPosition")
+        val texLoc = GLES30.glGetAttribLocation(comparisonProgram, "aTexCoord")
         GLES30.glEnableVertexAttribArray(posLoc)
         GLES30.glEnableVertexAttribArray(texLoc)
         vertexBuffer.position(0)
@@ -303,8 +303,9 @@ class ShaderPipeline {
     ) {
         GLES30.glUseProgram(program)
 
-        val posLoc = getLoc(program, "aPosition")
-        val texLoc = getLoc(program, "aTexCoord")
+        // CRITICAL: attributes must use glGetAttribLocation, NOT glGetUniformLocation!
+        val posLoc = GLES30.glGetAttribLocation(program, "aPosition")
+        val texLoc = GLES30.glGetAttribLocation(program, "aTexCoord")
         GLES30.glEnableVertexAttribArray(posLoc)
         GLES30.glEnableVertexAttribArray(texLoc)
         vertexBuffer.position(0)
@@ -313,6 +314,7 @@ class ShaderPipeline {
         GLES30.glVertexAttribPointer(texLoc, 2, GLES30.GL_FLOAT, false, 16, vertexBuffer)
         vertexBuffer.position(0)
 
+        // Uniforms use glGetUniformLocation (correct)
         val texUniform = getLoc(program, "uTexture")
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
         GLES30.glBindTexture(textureTarget, textureId)
@@ -394,6 +396,9 @@ class ShaderPipeline {
         GLES30.glFramebufferTexture2D(GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0,
             GLES30.GL_TEXTURE_2D, textureId, 0)
         val status = GLES30.glCheckFramebufferStatus(GLES30.GL_FRAMEBUFFER)
+        if (status != GLES30.GL_FRAMEBUFFER_COMPLETE) {
+            DebugLog.log("FBO", "FBO $fboId NOT COMPLETE! status=0x${status.toString(16)}")
+        }
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
         return fboId
     }

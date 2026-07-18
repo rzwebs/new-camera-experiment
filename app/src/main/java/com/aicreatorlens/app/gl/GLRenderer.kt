@@ -79,8 +79,7 @@ class GLRenderer : GLSurfaceView.Renderer {
         log("  GL_VENDOR: $vendor")
         log("  GL_RENDERER: $rendererStr")
 
-        log("  [2/8] enabling GL_TEXTURE_EXTERNAL_OES")
-        GLES30.glEnable(GLES11Ext.GL_TEXTURE_EXTERNAL_OES)
+        log("  [2/8] GL_TEXTURE_EXTERNAL_OES available (no glEnable needed)")
         log("  [2/8] OK")
 
         log("  [3/8] creating OES external texture...")
