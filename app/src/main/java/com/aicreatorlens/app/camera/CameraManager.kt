@@ -100,7 +100,7 @@ class CameraManager(private val context: Context) {
                 set(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_AUTO)
             }
 
-            captureSession = camera.createCaptureSession(
+            camera.createCaptureSession(
                 listOf(surface),
                 object : CameraCaptureSession.StateCallback() {
                     override fun onConfigured(session: CameraCaptureSession) {
@@ -108,9 +108,9 @@ class CameraManager(private val context: Context) {
                         captureSession = session
                         try {
                             val request = captureRequestBuilder.build()
-                            session.setRepeatingRequest(request, object : CaptureSession.CaptureCallback() {
+                            session.setRepeatingRequest(request, object : CameraCaptureSession.CaptureCallback() {
                                 override fun onCaptureStarted(
-                                    session: CaptureSession,
+                                    session: CameraCaptureSession,
                                     request: CaptureRequest,
                                     timestamp: Long,
                                     frameNumber: Long
