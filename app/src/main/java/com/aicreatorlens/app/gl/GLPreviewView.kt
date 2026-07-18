@@ -6,6 +6,7 @@ import android.util.AttributeSet
 import android.util.Log
 import android.view.TextureView
 import com.aicreatorlens.app.engine.CreatorEngine
+import com.aicreatorlens.app.ui.screens.DebugLog
 
 class GLPreviewView @JvmOverloads constructor(
     context: Context,
@@ -19,8 +20,13 @@ class GLPreviewView @JvmOverloads constructor(
     private var renderer: GLRenderer? = null
     private var surfaceReady = false
 
-    /** Called from GL thread when camera SurfaceTexture is created and ready. */
     var onCameraSurfaceTextureReady: ((SurfaceTexture) -> Unit)? = null
+
+    init {
+        DebugLog.log("VIEW", ">>> GLPreviewView init{} called")
+        surfaceTextureListener = this
+        DebugLog.log("VIEW", "surfaceTextureListener set")
+    }
 
     fun setEngineParams(params: CreatorEngine) {
         renderer?.setEngineParams(params)
@@ -34,13 +40,12 @@ class GLPreviewView @JvmOverloads constructor(
         renderer?.setComparisonSplit(position)
     }
 
-    fun getCameraSurfaceTexture(): SurfaceTexture? {
-        return renderer?.getCameraSurfaceTexture()
-    }
+    fun getCameraSurfaceTexture(): SurfaceTexture? = renderer?.getCameraSurfaceTexture()
 
     fun getRenderer(): GLRenderer? = renderer
 
     fun release() {
+        DebugLog.log("VIEW", "release() called")
         renderer?.stop()
         renderer = null
         surfaceReady = false
@@ -48,21 +53,23 @@ class GLPreviewView @JvmOverloads constructor(
     }
 
     override fun onSurfaceTextureAvailable(surface: SurfaceTexture, width: Int, height: Int) {
+        DebugLog.log("VIEW", ">>> onSurfaceTextureAvailable: ${width}x${height}")
         Log.d(TAG, "onSurfaceTextureAvailable: ${width}x${height}")
         surfaceReady = true
         startRenderer(width, height)
     }
 
     override fun onSurfaceTextureSizeChanged(surface: SurfaceTexture, width: Int, height: Int) {
-        Log.d(TAG, "onSurfaceTextureSizeChanged: ${width}x${height}")
-        renderer?.let { r ->
-            r.stop()
+        DebugLog.log("VIEW", "onSurfaceTextureSizeChanged: ${width}x${height}")
+        renderer?.let {
+            DebugLog.log("VIEW", "stopping old renderer, restarting...")
+            it.stop()
             startRenderer(width, height)
         }
     }
 
     override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean {
-        Log.d(TAG, "onSurfaceTextureDestroyed")
+        DebugLog.log("VIEW", "onSurfaceTextureDestroyed")
         renderer?.stop()
         renderer = null
         surfaceReady = false
@@ -70,27 +77,39 @@ class GLPreviewView @JvmOverloads constructor(
     }
 
     override fun onSurfaceTextureUpdated(surface: SurfaceTexture) {
-        // Required by TextureView.SurfaceTextureListener interface
+        // Required by interface
     }
 
     private fun startRenderer(width: Int, height: Int) {
-        if (!surfaceReady) return
-
-        val currentSurface = surfaceTexture ?: run {
-            Log.e(TAG, "startRenderer: surfaceTexture is null!")
+        DebugLog.log("VIEW", ">>> startRenderer($width, $height)")
+        if (!surfaceReady) {
+            DebugLog.log("VIEW", "BLOCKED: surfaceReady=false")
             return
         }
-        Log.d(TAG, "startRenderer: ${width}x${height}, creating GLRenderer")
+
+        val currentSurface = surfaceTexture
+        if (currentSurface == null) {
+            DebugLog.log("VIEW", "ERROR: surfaceTexture is null!")
+            return
+        }
+        DebugLog.log("VIEW", "surfaceTexture is valid")
+
         val callback = onCameraSurfaceTextureReady
+        DebugLog.log("VIEW", "creating GLRenderer...")
         renderer = GLRenderer().apply {
+            DebugLog.log("VIEW", "setting onSurfaceTextureAvailable callback on renderer")
             onSurfaceTextureAvailable = { st ->
-                Log.d(TAG, "Camera SurfaceTexture ready, notifying callback")
-                // Post to main thread so Compose can react
+                DebugLog.log("VIEW", ">>> GLRenderer callback FIRED — posting to main thread")
                 android.os.Handler(android.os.Looper.getMainLooper()).post {
+                    DebugLog.log("VIEW", ">>> invoking onCameraSurfaceTextureReady on main thread")
                     callback?.invoke(st)
+                    DebugLog.log("VIEW", "<<< onCameraSurfaceTextureReady done")
                 }
             }
+            DebugLog.log("VIEW", "calling renderer.start()...")
             start(android.view.Surface(currentSurface), width, height)
+            DebugLog.log("VIEW", "renderer.start() returned")
         }
+        DebugLog.log("VIEW", "<<< startRenderer done")
     }
 }

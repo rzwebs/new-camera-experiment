@@ -31,25 +31,6 @@ import com.aicreatorlens.app.engine.CreatorEngine
 import com.aicreatorlens.app.engine.Presets
 import com.aicreatorlens.app.gl.GLPreviewView
 
-/**
- * In-memory debug log overlay — shows camera + GL pipeline status on screen.
- */
-object DebugOverlay {
-    private val logs = java.util.concurrent.ConcurrentLinkedQueue<String>()
-    private var visible = true
-
-    fun log(tag: String, msg: String) {
-        val line = "[$tag] $msg"
-        logs.add(line)
-        while (logs.size > 25) logs.poll()
-    }
-
-    fun getLogs(): List<String> = logs.toList()
-
-    fun toggle() { visible = !visible }
-    fun isVisible(): Boolean = visible
-}
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CameraScreen(
@@ -57,53 +38,59 @@ fun CameraScreen(
     initialParams: CreatorEngine = Presets.CREATOR,
     onParamsChanged: (CreatorEngine) -> Unit = {}
 ) {
+    DebugLog.log("APP", "CameraScreen composable START")
+
     val context = LocalContext.current
 
     var hasPermission by remember {
-        mutableStateOf(
-            ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
-                PackageManager.PERMISSION_GRANTED
-        )
+        val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+        DebugLog.log("APP", "Permission check: ${if (granted) "GRANTED" else "DENIED"}")
+        mutableStateOf(granted)
     }
 
     var currentParams by remember { mutableStateOf(initialParams) }
-    var selectedPresetIndex by remember { mutableIntStateOf(1) } // Creator = index 1
+    var selectedPresetIndex by remember { mutableIntStateOf(1) }
     var comparisonMode by remember { mutableStateOf(false) }
 
-    // Raw Camera2 manager — no ProcessCameraProvider
-    val cameraManager = remember { CameraManager(context) }
+    val cameraManager = remember {
+        DebugLog.log("APP", "Creating CameraManager")
+        CameraManager(context)
+    }
     var cameraStarted by remember { mutableStateOf(false) }
-
-    // Debug overlay state
-    val debugLogs = remember { mutableStateOf(listOf<String>()) }
     var showDebug by remember { mutableStateOf(true) }
+    val debugLogs = remember { mutableStateOf("loading...") }
 
-    // Collect logs periodically from all sources
+    // Poll global log every 300ms
     LaunchedEffect(Unit) {
+        DebugLog.log("APP", "Log poller LaunchedEffect started")
         while (true) {
-            kotlinx.coroutines.delay(500)
-            val allLogs = mutableListOf<String>()
-            allLogs.addAll(cameraManager.getLogMessages())
-            // GLRenderer logs are collected from the view
-            debugLogs.value = allLogs
+            kotlinx.coroutines.delay(300)
+            val logs = DebugLog.getLogs()
+            debugLogs.value = if (logs.isEmpty()) "(no logs yet)" else logs.joinToString("\n")
         }
     }
 
-    // Callback when GL creates camera SurfaceTexture
-    val onSurfaceTextureReady: (android.graphics.SurfaceTexture) -> Unit = remember {
+    // SurfaceTexture callback from GL
+    val onSurfaceTextureReady: (android.graphics.SurfaceTexture) -> Unit = remember(cameraStarted) {
         { surfaceTexture ->
-            if (hasPermission && !cameraStarted) {
-                DebugOverlay.log("CAM", "SurfaceTexture received, starting Camera2...")
-                cameraManager.startCamera(surfaceTexture)
-                cameraStarted = true
+            DebugLog.log("APP", ">>> SurfaceTexture callback FIRED")
+            if (!hasPermission) {
+                DebugLog.log("APP", "BLOCKED: no permission yet")
+                return@remember
             }
+            if (cameraStarted) {
+                DebugLog.log("APP", "BLOCKED: camera already started")
+                return@remember
+            }
+            DebugLog.log("APP", ">>> Calling cameraManager.startCamera()")
+            cameraManager.startCamera(surfaceTexture)
+            cameraStarted = true
+            DebugLog.log("APP", "<<< cameraManager.startCamera() returned")
         }
     }
 
     DisposableEffect(Unit) {
-        onDispose {
-            cameraManager.stopCamera()
-        }
+        onDispose { cameraManager.stopCamera() }
     }
 
     Box(
@@ -112,46 +99,39 @@ fun CameraScreen(
             .background(Color.Black)
     ) {
         if (hasPermission) {
+            DebugLog.log("APP", "Creating AndroidView (hasPermission=true)")
             AndroidView(
                 factory = { ctx ->
-                    DebugOverlay.log("UI", "Creating GLPreviewView")
-                    GLPreviewView(ctx).apply {
-                        layoutParams = FrameLayout.LayoutParams(
-                            FrameLayout.LayoutParams.MATCH_PARENT,
-                            FrameLayout.LayoutParams.MATCH_PARENT
-                        )
-                        setEngineParams(currentParams)
-                        onCameraSurfaceTextureReady = { st ->
-                            DebugOverlay.log("UI", "GLPreviewView → SurfaceTexture callback!")
-                            onSurfaceTextureReady(st)
-                        }
+                    DebugLog.log("UI", ">>> AndroidView factory called")
+                    DebugLog.log("UI", ">>> Creating GLPreviewView...")
+                    val view = GLPreviewView(ctx)
+                    DebugLog.log("UI", ">>> GLPreviewView created, setting callbacks")
+                    view.layoutParams = FrameLayout.LayoutParams(
+                        FrameLayout.LayoutParams.MATCH_PARENT,
+                        FrameLayout.LayoutParams.MATCH_PARENT
+                    )
+                    view.setEngineParams(currentParams)
+                    view.onCameraSurfaceTextureReady = { st ->
+                        DebugLog.log("UI", ">>> GLPreviewView.onCameraSurfaceTextureReady INVOKED")
+                        onSurfaceTextureReady(st)
                     }
+                    DebugLog.log("UI", "<<< AndroidView factory done")
+                    view
                 },
                 modifier = Modifier.fillMaxSize(),
                 update = { view ->
                     view.setEngineParams(currentParams)
                     view.setComparisonMode(comparisonMode)
-                    // Collect GL + EGL logs from renderer
-                    val rendererLogs = view.getRenderer()?.getLogMessages() ?: emptyList()
-                    if (rendererLogs.isNotEmpty()) {
-                        val allLogs = mutableListOf<String>()
-                        allLogs.addAll(rendererLogs)
-                        allLogs.addAll(cameraManager.getLogMessages())
-                        debugLogs.value = allLogs
-                    }
                 }
             )
         } else {
+            DebugLog.log("APP", "Showing permission request screen")
             Box(
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text("Camera permission required", color = Color.White, fontSize = 18.sp)
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Button(onClick = { }) {
-                        Text("Grant Permission")
-                    }
                 }
             }
         }
@@ -160,59 +140,71 @@ fun CameraScreen(
         val permissionLauncher = rememberLauncherForActivityResult(
             ActivityResultContracts.RequestPermission()
         ) { granted ->
+            DebugLog.log("PERM", ">>> Permission result: $granted")
             hasPermission = granted
-            DebugOverlay.log("UI", "Permission result: $granted")
         }
 
         if (!hasPermission) {
             LaunchedEffect(Unit) {
+                DebugLog.log("PERM", ">>> Launching permission request...")
                 permissionLauncher.launch(Manifest.permission.CAMERA)
             }
         }
 
-        // Debug overlay — tap to toggle
-        if (showDebug && debugLogs.value.isNotEmpty()) {
+        // === DEBUG LOG OVERLAY (always visible, toggleable) ===
+        // Toggle button — always shown at top-right area
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(top = 52.dp, end = 56.dp)
+                .background(
+                    if (showDebug) Color(0xFF44FF44).copy(alpha = 0.8f) else Color(0xFFFF4444).copy(alpha = 0.6f),
+                    RoundedCornerShape(4.dp)
+                )
+                .clickable { showDebug = !showDebug }
+                .padding(horizontal = 10.dp, vertical = 4.dp)
+        ) {
+            Text(
+                if (showDebug) "LOG ON" else "LOG OFF",
+                color = Color.Black,
+                fontSize = 10.sp,
+                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+            )
+        }
+
+        // Log panel
+        if (showDebug) {
             Box(
                 modifier = Modifier
                     .align(Alignment.TopStart)
-                    .padding(top = 56.dp, start = 8.dp)
-                    .background(Color.Black.copy(alpha = 0.7f), RoundedCornerShape(6.dp))
-                    .padding(6.dp)
-                    .clickable { showDebug = false }
+                    .padding(top = 52.dp, start = 8.dp, end = 80.dp)
+                    .fillMaxHeight(0.45f)
+                    .background(Color.Black.copy(alpha = 0.85f), RoundedCornerShape(6.dp))
+                    .padding(8.dp)
+                    .clickable { /* do nothing, use toggle button */ }
             ) {
-                Column {
-                    debugLogs.value.forEach { line ->
-                        val color = if (line.contains("ERROR") || line.contains("FAILED")) {
-                            Color(0xFFFF4444)
-                        } else if (line.contains("SUCCESS") || line.contains("OPENED") ||
-                                   line.contains("CONFIGURED") || line.contains("READY") ||
-                                   line.contains("rendered") || line.contains("delivered")) {
-                            Color(0xFF44FF44)
-                        } else {
-                            Color(0xFFCCCCCC)
+                val scrollState = rememberScrollState()
+                Column(modifier = Modifier.verticalScroll(scrollState)) {
+                    val lines = debugLogs.value.split("\n")
+                    lines.forEach { line ->
+                        val color = when {
+                            line.contains("ERROR") || line.contains("FAILED") || line.contains("BLOCKED") -> Color(0xFFFF4444)
+                            line.contains(">>>") -> Color(0xFF44AAFF)
+                            line.contains("<<<") || line.contains("done") || line.contains("OK") ||
+                            line.contains("OPENED") || line.contains("CONFIGURED") || line.contains("READY") ||
+                            line.contains("rendered") || line.contains("created") -> Color(0xFF44FF44)
+                            else -> Color(0xFFCCCCCC)
                         }
                         Text(
                             text = line,
                             color = color,
                             fontSize = 9.sp,
                             lineHeight = 12.sp,
-                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                            softWrap = true
                         )
                     }
                 }
-            }
-        } else if (!showDebug && debugLogs.value.isNotEmpty()) {
-            // Small "LOG" button to re-enable
-            Box(
-                modifier = Modifier
-                    .align(Alignment.TopStart)
-                    .padding(top = 56.dp, start = 8.dp)
-                    .background(Color.Black.copy(alpha = 0.5f), RoundedCornerShape(4.dp))
-                    .clickable { showDebug = true }
-                    .padding(horizontal = 8.dp, vertical = 4.dp)
-            ) {
-                Text("LOG", color = Color.White.copy(0.6f), fontSize = 10.sp,
-                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace)
             }
         }
 
@@ -257,7 +249,6 @@ fun CameraScreen(
                 .navigationBarsPadding()
                 .padding(bottom = 16.dp)
         ) {
-            // Preset selector
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -275,7 +266,6 @@ fun CameraScreen(
                         if (isSelected) Color.Black else Color.White.copy(alpha = 0.7f),
                         label = "preset_text_$index"
                     )
-
                     Surface(
                         shape = RoundedCornerShape(20.dp),
                         color = bgColor,
@@ -286,23 +276,14 @@ fun CameraScreen(
                             onParamsChanged(newParams)
                         }
                     ) {
-                        Text(
-                            name,
-                            color = textColor,
-                            fontSize = 13.sp,
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
-                        )
+                        Text(name, color = textColor, fontSize = 13.sp,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
                     }
                 }
             }
-
             Spacer(modifier = Modifier.height(12.dp))
-
-            // Comparison toggle
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp),
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
                 horizontalArrangement = Arrangement.Center
             ) {
                 FilterChip(
@@ -310,11 +291,7 @@ fun CameraScreen(
                     onClick = { comparisonMode = !comparisonMode },
                     label = { Text("A/B Compare") },
                     leadingIcon = {
-                        Icon(
-                            Icons.Default.CompareArrows,
-                            contentDescription = null,
-                            modifier = Modifier.size(18.dp)
-                        )
+                        Icon(Icons.Default.CompareArrows, null, modifier = Modifier.size(18.dp))
                     },
                     colors = FilterChipDefaults.filterChipColors(
                         selectedContainerColor = Color.White.copy(alpha = 0.9f),

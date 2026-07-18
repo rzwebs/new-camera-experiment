@@ -3,6 +3,7 @@ package com.aicreatorlens.app.gl
 import android.opengl.GLES11Ext
 import android.opengl.GLES30
 import com.aicreatorlens.app.engine.CreatorEngine
+import com.aicreatorlens.app.ui.screens.DebugLog
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
@@ -59,12 +60,20 @@ class ShaderPipeline {
     }
 
     fun init() {
+        DebugLog.log("SHADER", ">>> compiling shaders...")
         passThroughProgram = createProgram(Shaders.VERTEX_SHADER, Shaders.PASS_THROUGH_FRAG)
+        DebugLog.log("SHADER", "  passThrough = $passThroughProgram")
         toneMappingProgram = createProgram(Shaders.VERTEX_SHADER, Shaders.TONE_MAPPING_FRAG)
+        DebugLog.log("SHADER", "  toneMapping = $toneMappingProgram")
         colorProfileProgram = createProgram(Shaders.VERTEX_SHADER, Shaders.COLOR_PROFILE_FRAG)
+        DebugLog.log("SHADER", "  colorProfile = $colorProfileProgram")
         skinEnhanceProgram = createProgram(Shaders.VERTEX_SHADER, Shaders.SKIN_ENHANCE_FRAG)
+        DebugLog.log("SHADER", "  skinEnhance = $skinEnhanceProgram")
         comparisonProgram = createProgram(Shaders.VERTEX_SHADER, Shaders.COMPARISON_FRAG)
+        DebugLog.log("SHADER", "  comparison = $comparisonProgram")
         outputProgram = createProgram(Shaders.VERTEX_SHADER, Shaders.OUTPUT_FRAG)
+        DebugLog.log("SHADER", "  output = $outputProgram")
+        DebugLog.log("SHADER", "<<< shader compilation done")
     }
 
     fun setupFramebuffers(width: Int, height: Int) {
