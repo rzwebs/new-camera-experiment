@@ -39,8 +39,6 @@ fun CameraScreen(
     initialParams: CreatorEngine = Presets.CREATOR,
     onParamsChanged: (CreatorEngine) -> Unit = {}
 ) {
-    DebugLog.log("APP", "CameraScreen composable START")
-
     val context = LocalContext.current
 
     var hasPermission by remember {
@@ -59,17 +57,6 @@ fun CameraScreen(
     }
     var cameraStarted by remember { mutableStateOf(false) }
     var showDebug by remember { mutableStateOf(true) }
-    val debugLogs = remember { mutableStateOf("loading...") }
-
-    // Poll global log every 300ms
-    LaunchedEffect(Unit) {
-        DebugLog.log("APP", "Log poller LaunchedEffect started")
-        while (true) {
-            kotlinx.coroutines.delay(300)
-            val logs = DebugLog.getLogs()
-            debugLogs.value = if (logs.isEmpty()) "(no logs yet)" else logs.joinToString("\n")
-        }
-    }
 
     // SurfaceTexture callback from GL
     val onSurfaceTextureReady: (android.graphics.SurfaceTexture) -> Unit = remember(cameraStarted) {
@@ -98,7 +85,6 @@ fun CameraScreen(
             .background(Color.Black)
     ) {
         if (hasPermission) {
-            DebugLog.log("APP", "Creating AndroidView (hasPermission=true)")
             AndroidView(
                 factory = { ctx ->
                     DebugLog.log("UI", ">>> AndroidView factory called")
@@ -150,62 +136,8 @@ fun CameraScreen(
             }
         }
 
-        // === DEBUG LOG OVERLAY (always visible, toggleable) ===
-        // Toggle button — always shown at top-right area
-        Box(
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(top = 52.dp, end = 56.dp)
-                .background(
-                    if (showDebug) Color(0xFF44FF44).copy(alpha = 0.8f) else Color(0xFFFF4444).copy(alpha = 0.6f),
-                    RoundedCornerShape(4.dp)
-                )
-                .clickable { showDebug = !showDebug }
-                .padding(horizontal = 10.dp, vertical = 4.dp)
-        ) {
-            Text(
-                if (showDebug) "LOG ON" else "LOG OFF",
-                color = Color.Black,
-                fontSize = 10.sp,
-                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
-            )
-        }
-
-        // Log panel
-        if (showDebug) {
-            Box(
-                modifier = Modifier
-                    .align(Alignment.TopStart)
-                    .padding(top = 52.dp, start = 8.dp, end = 80.dp)
-                    .fillMaxHeight(0.45f)
-                    .background(Color.Black.copy(alpha = 0.85f), RoundedCornerShape(6.dp))
-                    .padding(8.dp)
-                    .clickable { /* do nothing, use toggle button */ }
-            ) {
-                val scrollState = rememberScrollState()
-                Column(modifier = Modifier.verticalScroll(scrollState)) {
-                    val lines = debugLogs.value.split("\n")
-                    lines.forEach { line ->
-                        val color = when {
-                            line.contains("ERROR") || line.contains("FAILED") || line.contains("BLOCKED") -> Color(0xFFFF4444)
-                            line.contains(">>>") -> Color(0xFF44AAFF)
-                            line.contains("<<<") || line.contains("done") || line.contains("OK") ||
-                            line.contains("OPENED") || line.contains("CONFIGURED") || line.contains("READY") ||
-                            line.contains("rendered") || line.contains("created") -> Color(0xFF44FF44)
-                            else -> Color(0xFFCCCCCC)
-                        }
-                        Text(
-                            text = line,
-                            color = color,
-                            fontSize = 9.sp,
-                            lineHeight = 12.sp,
-                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                            softWrap = true
-                        )
-                    }
-                }
-            }
-        }
+        // === DEBUG LOG OVERLAY (isolated composable to avoid parent recomposition) ===
+        DebugLogOverlay(showDebug = showDebug, onToggle = { showDebug = !showDebug })
 
         // Top bar
         Row(
@@ -297,6 +229,84 @@ fun CameraScreen(
                         selectedLabelColor = Color.Black
                     )
                 )
+            }
+        }
+    }
+}
+
+/**
+ * Isolated debug log overlay — its own recomposition scope
+ * so log text updates don't trigger parent CameraScreen recomposition.
+ */
+@Composable
+private fun BoxScope.DebugLogOverlay(
+    showDebug: Boolean,
+    onToggle: () -> Unit
+) {
+    // Log state lives HERE, not in parent
+    var debugLogs by remember { mutableStateOf("loading...") }
+
+    LaunchedEffect(Unit) {
+        DebugLog.log("APP", "Log poller LaunchedEffect started")
+        while (true) {
+            kotlinx.coroutines.delay(500)
+            val logs = DebugLog.getLogs()
+            debugLogs = if (logs.isEmpty()) "(no logs yet)" else logs.joinToString("\n")
+        }
+    }
+
+    // Toggle button — always shown at top-right area
+    Box(
+        modifier = Modifier
+            .align(Alignment.TopEnd)
+            .padding(top = 52.dp, end = 56.dp)
+            .background(
+                if (showDebug) Color(0xFF44FF44).copy(alpha = 0.8f) else Color(0xFFFF4444).copy(alpha = 0.6f),
+                RoundedCornerShape(4.dp)
+            )
+            .clickable { onToggle() }
+            .padding(horizontal = 10.dp, vertical = 4.dp)
+    ) {
+        Text(
+            if (showDebug) "LOG ON" else "LOG OFF",
+            color = Color.Black,
+            fontSize = 10.sp,
+            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+        )
+    }
+
+    // Log panel
+    if (showDebug) {
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .padding(top = 52.dp, start = 8.dp, end = 80.dp)
+                .fillMaxHeight(0.45f)
+                .background(Color.Black.copy(alpha = 0.85f), RoundedCornerShape(6.dp))
+                .padding(8.dp)
+        ) {
+            val scrollState = rememberScrollState()
+            Column(modifier = Modifier.verticalScroll(scrollState)) {
+                val lines = debugLogs.split("\n")
+                lines.forEach { line ->
+                    val color = when {
+                        line.contains("ERROR") || line.contains("FAILED") || line.contains("BLOCKED")
+                                || line.contains("TEST PATTERN") -> Color(0xFFFF4444)
+                        line.contains(">>>") -> Color(0xFF44AAFF)
+                        line.contains("<<<") || line.contains("done") || line.contains("OK") ||
+                                line.contains("OPENED") || line.contains("CONFIGURED") || line.contains("READY") ||
+                                line.contains("RECEIVED") || line.contains("magenta") -> Color(0xFF44FF44)
+                        else -> Color(0xFFCCCCCC)
+                    }
+                    Text(
+                        text = line,
+                        color = color,
+                        fontSize = 9.sp,
+                        lineHeight = 12.sp,
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                        softWrap = true
+                    )
+                }
             }
         }
     }

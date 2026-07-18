@@ -1,6 +1,5 @@
 package com.aicreatorlens.app.gl
 
-import android.content.Context
 import android.graphics.SurfaceTexture
 import android.opengl.GLES11Ext
 import android.opengl.GLES30
@@ -36,6 +35,9 @@ class GLRenderer : GLSurfaceView.Renderer {
     private var frameAvailable = false
     private val frameLock = Object()
     private val logMessages = java.util.concurrent.ConcurrentLinkedQueue<String>()
+    private var drawFrameCount = 0
+    private var framesWithCameraData = 0
+    @Volatile private var testPatternMode = false
 
     // Callback to notify when camera SurfaceTexture is ready
     var onSurfaceTextureReady: ((SurfaceTexture) -> Unit)? = null
@@ -59,6 +61,9 @@ class GLRenderer : GLSurfaceView.Renderer {
     fun onCameraFrameAvailable() {
         synchronized(frameLock) {
             frameAvailable = true
+            if (framesWithCameraData < 3) {
+                DebugLog.log("GL", "onCameraFrameAvailable() called! total=$framesWithCameraData")
+            }
         }
     }
 
@@ -117,18 +122,54 @@ class GLRenderer : GLSurfaceView.Renderer {
     }
 
     override fun onDrawFrame(gl: GL10?) {
+        drawFrameCount++
+        var gotFrame = false
+
         // Update camera texture if frame available
         synchronized(frameLock) {
             if (frameAvailable) {
                 cameraSurfaceTexture?.let { st ->
                     st.updateTexImage()
                     st.getTransformMatrix(textureMatrix)
+                    gotFrame = true
+                    framesWithCameraData++
                 }
                 frameAvailable = false
             }
         }
 
+        // Diagnostic: log every 30 frames
+        if (drawFrameCount % 30 == 1) {
+            val err = GLES30.glGetError()
+            log("draw#$drawFrameCount frameAvail=$frameAvailable cameraTex=$cameraTextureId st=${cameraSurfaceTexture != null} err=$err dataFrames=$framesWithCameraData")
+        }
+
+        // Log first camera frame arrival
+        synchronized(this) {
+            if (!firstFrameLogged) {
+                log(">>> FIRST FRAME RENDERED! (no camera data yet)")
+                firstFrameLogged = true
+            }
+            if (gotFrame && firstCameraFrameLogged == 0) {
+                firstCameraFrameLogged = drawFrameCount
+                log(">>> FIRST CAMERA FRAME RECEIVED on draw#$drawFrameCount!")
+            }
+        }
+
         if (surfaceWidth <= 0 || surfaceHeight <= 0) return
+
+        // TEST PATTERN: if no camera data after 90 frames, render magenta to prove GL works
+        if (framesWithCameraData == 0 && drawFrameCount > 90 && !testPatternMode) {
+            testPatternMode = true
+            log(">>> NO CAMERA DATA after 90 frames! Switching to TEST PATTERN (magenta)")
+        }
+
+        if (testPatternMode) {
+            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+            GLES30.glClearColor(1.0f, 0.0f, 1.0f, 1.0f) // MAGENTA
+            GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
+            return
+        }
 
         val params = paramsRef.get()
         pipeline.render(
@@ -141,16 +182,10 @@ class GLRenderer : GLSurfaceView.Renderer {
             comparisonSplit = comparisonSplitRef.get(),
             flipX = flipXRef.get()
         )
-
-        // Log first frame
-        synchronized(this) {
-            if (!firstFrameLogged) {
-                log(">>> FIRST FRAME RENDERED!")
-                firstFrameLogged = true
-            }
-        }
     }
 
     @Volatile
     private var firstFrameLogged = false
+    @Volatile
+    private var firstCameraFrameLogged = 0
 }
