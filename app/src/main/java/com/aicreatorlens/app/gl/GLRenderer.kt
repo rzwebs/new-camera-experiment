@@ -4,7 +4,6 @@ import android.graphics.SurfaceTexture
 import android.opengl.GLES11Ext
 import android.opengl.GLES30
 import android.opengl.GLSurfaceView
-import android.os.SystemClock
 import android.util.Log
 import com.aicreatorlens.app.engine.CreatorEngine
 import com.aicreatorlens.app.ui.screens.DebugLog
@@ -48,7 +47,7 @@ class GLRenderer : GLSurfaceView.Renderer {
         Log.d(TAG, msg)
         logMessages.add(msg)
         DebugLog.log("GL", msg)
-        while (logMessages.size > 50) logMessages.poll()
+        while (logMessages.size > 200) logMessages.poll()
     }
 
     fun setEngineParams(params: CreatorEngine) { paramsRef.set(params) }
@@ -61,8 +60,8 @@ class GLRenderer : GLSurfaceView.Renderer {
     fun onCameraFrameAvailable() {
         synchronized(frameLock) {
             frameAvailable = true
-            if (framesWithCameraData < 3) {
-                DebugLog.log("GL", "onCameraFrameAvailable() called! total=$framesWithCameraData")
+            if (framesWithCameraData < 5) {
+                DebugLog.log("FRAME", "onCameraFrameAvailable() FIRED! dataSoFar=$framesWithCameraData")
             }
         }
     }
@@ -70,46 +69,70 @@ class GLRenderer : GLSurfaceView.Renderer {
     // --- GLSurfaceView.Renderer ---
 
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
-        log(">>> onSurfaceCreated()")
-        log("step 1: reading GL strings")
+        log(">>> onSurfaceCreated() START")
+        log("  thread: ${Thread.currentThread().name}")
+
+        log("  [1/8] reading GL strings...")
         val version = GLES30.glGetString(GLES30.GL_VERSION) ?: "unknown"
         val vendor = GLES30.glGetString(GLES30.GL_VENDOR) ?: "unknown"
-        val renderer = GLES30.glGetString(GLES30.GL_RENDERER) ?: "unknown"
+        val rendererStr = GLES30.glGetString(GLES30.GL_RENDERER) ?: "unknown"
         log("  GL_VERSION: $version")
         log("  GL_VENDOR: $vendor")
-        log("  GL_RENDERER: $renderer")
+        log("  GL_RENDERER: $rendererStr")
 
-        log("step 2: enabling GL_TEXTURE_EXTERNAL_OES")
+        log("  [2/8] enabling GL_TEXTURE_EXTERNAL_OES")
         GLES30.glEnable(GLES11Ext.GL_TEXTURE_EXTERNAL_OES)
+        log("  [2/8] OK")
 
-        log("step 3: glGenTextures (OES external)")
+        log("  [3/8] creating OES external texture...")
         val textures = IntArray(1)
         GLES30.glGenTextures(1, textures, 0)
         cameraTextureId = textures[0]
-        log("  camera texture ID = $cameraTextureId")
+        log("  glGenTextures => cameraTextureId = $cameraTextureId")
 
         GLES30.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, cameraTextureId)
         GLES30.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
         GLES30.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
         GLES30.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
         GLES30.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
-        log("step 3 done: texture params set")
+        log("  [3/8] OK - texture $cameraTextureId configured")
 
-        log("step 4: creating SurfaceTexture from GL texture")
-        cameraSurfaceTexture = SurfaceTexture(cameraTextureId).apply {
-            setOnFrameAvailableListener({
-                onCameraFrameAvailable()
-            }, android.os.Handler(android.os.Looper.getMainLooper()))
-        }
-        log("step 4 done: SurfaceTexture created")
+        log("  [4/8] creating SurfaceTexture from GL texture $cameraTextureId...")
+        cameraSurfaceTexture = SurfaceTexture(cameraTextureId)
+        log("  SurfaceTexture object created")
 
-        log("step 5: compiling shaders")
+        log("  [4b/8] setting onFrameAvailableListener (NO handler = any thread)...")
+        cameraSurfaceTexture!!.setOnFrameAvailableListener({ st ->
+            DebugLog.log("FRAME", "SurfaceTexture.onFrameAvailable FIRED on thread=${Thread.currentThread().name}")
+            onCameraFrameAvailable()
+        })
+        log("  [4b/8] listener registered OK")
+
+        log("  [5/8] compiling shaders...")
         pipeline.init()
-        log("step 5 done: ${pipeline.getProgramCount()} programs")
+        log("  [5/8] OK - ${pipeline.getProgramCount()} programs compiled")
 
-        log("step 6: notifying callback (camera can start)")
-        onSurfaceTextureReady?.invoke(cameraSurfaceTexture!!)
-        log("step 6 done: callback invoked")
+        log("  [6/8] notifying onSurfaceTextureReady callback...")
+        val st = cameraSurfaceTexture
+        if (st != null && onSurfaceTextureReady != null) {
+            log("  [6/8] invoking callback with SurfaceTexture...")
+            onSurfaceTextureReady!!.invoke(st)
+            log("  [6/8] callback returned OK")
+        } else {
+            log("  [6/8] WARNING: st=$st callback=$onSurfaceTextureReady")
+        }
+
+        log("  [7/8] checking GL errors...")
+        var err = GLES30.glGetError()
+        var errCount = 0
+        while (err != GLES30.GL_NO_ERROR && errCount < 5) {
+            log("  GL ERROR after init: 0x${err.toString(16)}")
+            err = GLES30.glGetError()
+            errCount++
+        }
+        if (errCount == 0) log("  [7/8] OK - no GL errors")
+
+        log("  [8/8] GL surface created successfully!")
         log("<<< onSurfaceCreated() COMPLETE")
     }
 
@@ -118,59 +141,66 @@ class GLRenderer : GLSurfaceView.Renderer {
         surfaceWidth = width
         surfaceHeight = height
         GLES30.glViewport(0, 0, width, height)
-        log("<<< onSurfaceChanged() done")
+        log("<<< onSurfaceChanged() done, viewport set")
     }
 
     override fun onDrawFrame(gl: GL10?) {
         drawFrameCount++
         var gotFrame = false
 
-        // Update camera texture if frame available
+        // Check for camera frame
         synchronized(frameLock) {
             if (frameAvailable) {
-                cameraSurfaceTexture?.let { st ->
-                    st.updateTexImage()
-                    st.getTransformMatrix(textureMatrix)
-                    gotFrame = true
-                    framesWithCameraData++
+                if (cameraSurfaceTexture != null) {
+                    try {
+                        cameraSurfaceTexture!!.updateTexImage()
+                        cameraSurfaceTexture!!.getTransformMatrix(textureMatrix)
+                        gotFrame = true
+                        framesWithCameraData++
+                    } catch (e: Exception) {
+                        if (framesWithCameraData == 0) {
+                            DebugLog.log("GL", "updateTexImage EXCEPTION: ${e.javaClass.simpleName}: ${e.message}")
+                        }
+                    }
+                } else {
+                    if (drawFrameCount < 10) {
+                        DebugLog.log("GL", "frameAvailable=true but cameraSurfaceTexture is NULL!")
+                    }
                 }
                 frameAvailable = false
             }
         }
 
-        // Diagnostic: log every 30 frames
-        if (drawFrameCount % 30 == 1) {
-            val err = GLES30.glGetError()
-            log("draw#$drawFrameCount frameAvail=$frameAvailable cameraTex=$cameraTextureId st=${cameraSurfaceTexture != null} err=$err dataFrames=$framesWithCameraData")
+        // Log first camera frame
+        if (gotFrame && firstCameraFrameLogged == 0) {
+            firstCameraFrameLogged = drawFrameCount
+            log(">>> CAMERA FRAME RECEIVED on draw#$drawFrameCount! Pipeline will now show camera!")
         }
 
-        // Log first camera frame arrival
-        synchronized(this) {
-            if (!firstFrameLogged) {
-                log(">>> FIRST FRAME RENDERED! (no camera data yet)")
-                firstFrameLogged = true
-            }
-            if (gotFrame && firstCameraFrameLogged == 0) {
-                firstCameraFrameLogged = drawFrameCount
-                log(">>> FIRST CAMERA FRAME RECEIVED on draw#$drawFrameCount!")
-            }
+        // Periodic diagnostics every 60 frames (~2 sec)
+        if (drawFrameCount % 60 == 1) {
+            log("HEARTBEAT draw=$drawFrameCount w=$surfaceWidth h=$surfaceHeight tex=$cameraTextureId st=${cameraSurfaceTexture != null} data=$framesWithCameraData avail=$frameAvailable")
         }
 
         if (surfaceWidth <= 0 || surfaceHeight <= 0) return
 
-        // TEST PATTERN: if no camera data after 90 frames, render magenta to prove GL works
-        if (framesWithCameraData == 0 && drawFrameCount > 90 && !testPatternMode) {
+        // TEST PATTERN: if no camera data after 30 frames (~1 sec), show GREEN to prove GL works
+        if (framesWithCameraData == 0 && drawFrameCount > 30 && !testPatternMode) {
             testPatternMode = true
-            log(">>> NO CAMERA DATA after 90 frames! Switching to TEST PATTERN (magenta)")
+            log(">>> NO CAMERA DATA after $drawFrameCount frames! Showing GREEN test pattern")
+            log(">>> If you see GREEN: GL pipeline works, camera frames not reaching texture")
+            log(">>> If still BLACK: GLSurfaceView surface not visible or destroyed")
         }
 
         if (testPatternMode) {
             GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
-            GLES30.glClearColor(1.0f, 0.0f, 1.0f, 1.0f) // MAGENTA
+            GLES30.glViewport(0, 0, surfaceWidth, surfaceHeight)
+            GLES30.glClearColor(0.0f, 1.0f, 0.0f, 1.0f) // GREEN - very visible
             GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
             return
         }
 
+        // Normal pipeline render
         val params = paramsRef.get()
         pipeline.render(
             cameraTextureId = cameraTextureId,
@@ -184,8 +214,6 @@ class GLRenderer : GLSurfaceView.Renderer {
         )
     }
 
-    @Volatile
-    private var firstFrameLogged = false
     @Volatile
     private var firstCameraFrameLogged = 0
 }

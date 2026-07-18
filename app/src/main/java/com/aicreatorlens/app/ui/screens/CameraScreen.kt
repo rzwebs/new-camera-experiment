@@ -1,8 +1,12 @@
 package com.aicreatorlens.app.ui.screens
 
 import android.Manifest
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.pm.PackageManager
 import android.widget.FrameLayout
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateColorAsState
@@ -16,6 +20,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CompareArrows
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -39,11 +44,13 @@ fun CameraScreen(
     initialParams: CreatorEngine = Presets.CREATOR,
     onParamsChanged: (CreatorEngine) -> Unit = {}
 ) {
+    DebugLog.log("APP", "=== CameraScreen composed ===")
+
     val context = LocalContext.current
 
     var hasPermission by remember {
         val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
-        DebugLog.log("APP", "Permission check: ${if (granted) "GRANTED" else "DENIED"}")
+        DebugLog.log("APP", "Camera permission: ${if (granted) "GRANTED" else "DENIED"}")
         mutableStateOf(granted)
     }
 
@@ -52,7 +59,7 @@ fun CameraScreen(
     var comparisonMode by remember { mutableStateOf(false) }
 
     val cameraManager = remember {
-        DebugLog.log("APP", "Creating CameraManager")
+        DebugLog.log("APP", "CameraManager created")
         CameraManager(context)
     }
     var cameraStarted by remember { mutableStateOf(false) }
@@ -61,13 +68,13 @@ fun CameraScreen(
     // SurfaceTexture callback from GL
     val onSurfaceTextureReady: (android.graphics.SurfaceTexture) -> Unit = remember(cameraStarted) {
         { surfaceTexture ->
-            DebugLog.log("APP", ">>> SurfaceTexture callback FIRED")
+            DebugLog.log("APP", ">>> SurfaceTexture callback FIRED!")
             if (!hasPermission) {
-                DebugLog.log("APP", "BLOCKED: no permission yet")
+                DebugLog.log("APP", "BLOCKED: no camera permission")
             } else if (cameraStarted) {
                 DebugLog.log("APP", "BLOCKED: camera already started")
             } else {
-                DebugLog.log("APP", ">>> Calling cameraManager.startCamera()")
+                DebugLog.log("APP", ">>> Starting camera with SurfaceTexture...")
                 cameraManager.startCamera(surfaceTexture)
                 cameraStarted = true
                 DebugLog.log("APP", "<<< cameraManager.startCamera() returned")
@@ -87,20 +94,19 @@ fun CameraScreen(
         if (hasPermission) {
             AndroidView(
                 factory = { ctx ->
-                    DebugLog.log("UI", ">>> AndroidView factory called")
-                    DebugLog.log("UI", ">>> Creating GLPreviewView...")
+                    DebugLog.log("UI", ">>> AndroidView factory START")
                     val view = GLPreviewView(ctx)
-                    DebugLog.log("UI", ">>> GLPreviewView created, setting callbacks")
+                    DebugLog.log("UI", "GLPreviewView created")
                     view.layoutParams = FrameLayout.LayoutParams(
                         FrameLayout.LayoutParams.MATCH_PARENT,
                         FrameLayout.LayoutParams.MATCH_PARENT
                     )
                     view.setEngineParams(currentParams)
                     view.onCameraSurfaceTextureReady = { st ->
-                        DebugLog.log("UI", ">>> GLPreviewView.onCameraSurfaceTextureReady INVOKED")
+                        DebugLog.log("UI", ">>> GLPreviewView callback -> onSurfaceTextureReady")
                         onSurfaceTextureReady(st)
                     }
-                    DebugLog.log("UI", "<<< AndroidView factory done")
+                    DebugLog.log("UI", "<<< AndroidView factory DONE")
                     view
                 },
                 modifier = Modifier.fillMaxSize(),
@@ -110,14 +116,11 @@ fun CameraScreen(
                 }
             )
         } else {
-            DebugLog.log("APP", "Showing permission request screen")
             Box(
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center
             ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("Camera permission required", color = Color.White, fontSize = 18.sp)
-                }
+                Text("Camera permission required", color = Color.White, fontSize = 18.sp)
             }
         }
 
@@ -125,18 +128,18 @@ fun CameraScreen(
         val permissionLauncher = rememberLauncherForActivityResult(
             ActivityResultContracts.RequestPermission()
         ) { granted ->
-            DebugLog.log("PERM", ">>> Permission result: $granted")
+            DebugLog.log("PERM", "Permission result: $granted")
             hasPermission = granted
         }
 
         if (!hasPermission) {
             LaunchedEffect(Unit) {
-                DebugLog.log("PERM", ">>> Launching permission request...")
+                DebugLog.log("PERM", "Requesting camera permission...")
                 permissionLauncher.launch(Manifest.permission.CAMERA)
             }
         }
 
-        // === DEBUG LOG OVERLAY (isolated composable to avoid parent recomposition) ===
+        // === DEBUG LOG OVERLAY (isolated composable) ===
         DebugLogOverlay(showDebug = showDebug, onToggle = { showDebug = !showDebug })
 
         // Top bar
@@ -235,44 +238,83 @@ fun CameraScreen(
 }
 
 /**
- * Isolated debug log overlay — its own recomposition scope
- * so log text updates don't trigger parent CameraScreen recomposition.
+ * Isolated debug overlay with COPY button.
+ * Updates to log text only recompose THIS composable, not parent.
  */
 @Composable
 private fun BoxScope.DebugLogOverlay(
     showDebug: Boolean,
     onToggle: () -> Unit
 ) {
-    // Log state lives HERE, not in parent
-    var debugLogs by remember { mutableStateOf("loading...") }
+    var debugLogs by remember { mutableStateOf("waiting for logs...") }
+    val context = LocalContext.current
+    var copiedToast by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
-        DebugLog.log("APP", "Log poller LaunchedEffect started")
         while (true) {
-            kotlinx.coroutines.delay(500)
+            kotlinx.coroutines.delay(400)
             val logs = DebugLog.getLogs()
             debugLogs = if (logs.isEmpty()) "(no logs yet)" else logs.joinToString("\n")
         }
     }
 
-    // Toggle button — always shown at top-right area
-    Box(
+    // Show "copied!" toast
+    LaunchedEffect(copiedToast) {
+        if (copiedToast) {
+            Toast.makeText(context, "LOGS COPIED! Paste anywhere.", Toast.LENGTH_SHORT).show()
+            copiedToast = false
+        }
+    }
+
+    // Button row: LOG ON/OFF + COPY
+    Row(
         modifier = Modifier
             .align(Alignment.TopEnd)
-            .padding(top = 52.dp, end = 56.dp)
-            .background(
-                if (showDebug) Color(0xFF44FF44).copy(alpha = 0.8f) else Color(0xFFFF4444).copy(alpha = 0.6f),
-                RoundedCornerShape(4.dp)
-            )
-            .clickable { onToggle() }
-            .padding(horizontal = 10.dp, vertical = 4.dp)
+            .padding(top = 52.dp, end = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
     ) {
-        Text(
-            if (showDebug) "LOG ON" else "LOG OFF",
-            color = Color.Black,
-            fontSize = 10.sp,
-            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
-        )
+        // COPY button
+        Box(
+            modifier = Modifier
+                .background(Color(0xFFFFFF00).copy(alpha = 0.9f), RoundedCornerShape(4.dp))
+                .clickable {
+                    val allLogs = DebugLog.getLogs().joinToString("\n")
+                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                    clipboard.setPrimaryClip(ClipData.newPlainText("app_logs", allLogs))
+                    copiedToast = true
+                }
+                .padding(horizontal = 8.dp, vertical = 4.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.Default.ContentCopy,
+                    contentDescription = "Copy logs",
+                    tint = Color.Black,
+                    modifier = Modifier.size(12.dp)
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Text("COPY", color = Color.Black, fontSize = 10.sp,
+                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace)
+            }
+        }
+
+        // LOG ON/OFF toggle
+        Box(
+            modifier = Modifier
+                .background(
+                    if (showDebug) Color(0xFF44FF44).copy(alpha = 0.8f) else Color(0xFFFF4444).copy(alpha = 0.6f),
+                    RoundedCornerShape(4.dp)
+                )
+                .clickable { onToggle() }
+                .padding(horizontal = 10.dp, vertical = 4.dp)
+        ) {
+            Text(
+                if (showDebug) "LOG ON" else "LOG OFF",
+                color = Color.Black,
+                fontSize = 10.sp,
+                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+            )
+        }
     }
 
     // Log panel
@@ -280,10 +322,10 @@ private fun BoxScope.DebugLogOverlay(
         Box(
             modifier = Modifier
                 .align(Alignment.TopStart)
-                .padding(top = 52.dp, start = 8.dp, end = 80.dp)
-                .fillMaxHeight(0.45f)
-                .background(Color.Black.copy(alpha = 0.85f), RoundedCornerShape(6.dp))
-                .padding(8.dp)
+                .padding(top = 80.dp, start = 8.dp, end = 110.dp)
+                .fillMaxHeight(0.40f)
+                .background(Color.Black.copy(alpha = 0.9f), RoundedCornerShape(6.dp))
+                .padding(6.dp)
         ) {
             val scrollState = rememberScrollState()
             Column(modifier = Modifier.verticalScroll(scrollState)) {
@@ -291,18 +333,18 @@ private fun BoxScope.DebugLogOverlay(
                 lines.forEach { line ->
                     val color = when {
                         line.contains("ERROR") || line.contains("FAILED") || line.contains("BLOCKED")
-                                || line.contains("TEST PATTERN") -> Color(0xFFFF4444)
-                        line.contains(">>>") -> Color(0xFF44AAFF)
-                        line.contains("<<<") || line.contains("done") || line.contains("OK") ||
-                                line.contains("OPENED") || line.contains("CONFIGURED") || line.contains("READY") ||
-                                line.contains("RECEIVED") || line.contains("magenta") -> Color(0xFF44FF44)
-                        else -> Color(0xFFCCCCCC)
+                                || line.contains("EXCEPTION") || line.contains("WARNING") -> Color(0xFFFF4444)
+                        line.contains(">>>") || line.contains("HEARTBEAT") -> Color(0xFF44AAFF)
+                        line.contains("<<<") || line.contains("OK") || line.contains("done")
+                                || line.contains("COMPLETE") || line.contains("RECEIVED")
+                                || line.contains("STREAMING") || line.contains("FIRED") -> Color(0xFF44FF44)
+                        else -> Color(0xFFBBBBBB)
                     }
                     Text(
                         text = line,
                         color = color,
-                        fontSize = 9.sp,
-                        lineHeight = 12.sp,
+                        fontSize = 8.sp,
+                        lineHeight = 10.sp,
                         fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
                         softWrap = true
                     )
