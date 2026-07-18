@@ -36,7 +36,6 @@ class GLRenderer : GLSurfaceView.Renderer {
     private val logMessages = java.util.concurrent.ConcurrentLinkedQueue<String>()
     private var drawFrameCount = 0
     private var framesWithCameraData = 0
-    @Volatile private var testPatternMode = false
 
     // Callback to notify when camera SurfaceTexture is ready
     var onSurfaceTextureReady: ((SurfaceTexture) -> Unit)? = null
@@ -60,8 +59,8 @@ class GLRenderer : GLSurfaceView.Renderer {
     fun onCameraFrameAvailable() {
         synchronized(frameLock) {
             frameAvailable = true
-            if (framesWithCameraData < 5) {
-                DebugLog.log("FRAME", "onCameraFrameAvailable() FIRED! dataSoFar=$framesWithCameraData")
+            if (framesWithCameraData < 2) {
+                DebugLog.log("FRAME", "onFrameAvailable FIRED (dataSoFar=$framesWithCameraData)")
             }
         }
     }
@@ -102,8 +101,7 @@ class GLRenderer : GLSurfaceView.Renderer {
         log("  SurfaceTexture object created")
 
         log("  [4b/8] setting onFrameAvailableListener (NO handler = any thread)...")
-        cameraSurfaceTexture!!.setOnFrameAvailableListener({ st ->
-            DebugLog.log("FRAME", "SurfaceTexture.onFrameAvailable FIRED on thread=${Thread.currentThread().name}")
+        cameraSurfaceTexture!!.setOnFrameAvailableListener({ _ ->
             onCameraFrameAvailable()
         })
         log("  [4b/8] listener registered OK")
@@ -184,23 +182,8 @@ class GLRenderer : GLSurfaceView.Renderer {
 
         if (surfaceWidth <= 0 || surfaceHeight <= 0) return
 
-        // TEST PATTERN: if no camera data after 30 frames (~1 sec), show GREEN to prove GL works
-        if (framesWithCameraData == 0 && drawFrameCount > 30 && !testPatternMode) {
-            testPatternMode = true
-            log(">>> NO CAMERA DATA after $drawFrameCount frames! Showing GREEN test pattern")
-            log(">>> If you see GREEN: GL pipeline works, camera frames not reaching texture")
-            log(">>> If still BLACK: GLSurfaceView surface not visible or destroyed")
-        }
-
-        if (testPatternMode) {
-            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
-            GLES30.glViewport(0, 0, surfaceWidth, surfaceHeight)
-            GLES30.glClearColor(0.0f, 1.0f, 0.0f, 1.0f) // GREEN - very visible
-            GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
-            return
-        }
-
-        // Normal pipeline render
+        // === NORMAL PIPELINE RENDER ===
+        // (test pattern removed — GL confirmed working, camera frames flowing)
         val params = paramsRef.get()
         pipeline.render(
             cameraTextureId = cameraTextureId,
