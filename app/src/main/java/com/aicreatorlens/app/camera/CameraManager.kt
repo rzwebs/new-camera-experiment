@@ -18,7 +18,7 @@ class CameraManager(private val context: Context) {
 
     private val TAG = "CameraManager"
     private var cameraDevice: CameraDevice? = null
-    private var captureSession: CaptureSession? = null
+    private var captureSession: CameraCaptureSession? = null
     private var handlerThread: HandlerThread? = null
     private var handler: Handler? = null
     private val logMessages = ConcurrentLinkedQueue<String>()
@@ -102,8 +102,8 @@ class CameraManager(private val context: Context) {
 
             captureSession = camera.createCaptureSession(
                 listOf(surface),
-                object : CaptureSession.StateCallback() {
-                    override fun onConfigured(session: CaptureSession) {
+                object : CameraCaptureSession.StateCallback() {
+                    override fun onConfigured(session: CameraCaptureSession) {
                         log("CaptureSession CONFIGURED")
                         captureSession = session
                         try {
@@ -126,7 +126,7 @@ class CameraManager(private val context: Context) {
                         }
                     }
 
-                    override fun onConfigureFailed(session: CaptureSession) {
+                    override fun onConfigureFailed(session: CameraCaptureSession) {
                         log("CaptureSession CONFIGURE FAILED")
                     }
                 },
