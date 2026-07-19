@@ -45,6 +45,10 @@ class ShaderPipeline {
     private var fboWidth = 0
     private var fboHeight = 0
 
+    // Camera resolution — FBOs are created at this size, not surface size
+    private var cameraWidth = 0
+    private var cameraHeight = 0
+
     // Attribute / Uniform locations
     private val locations = mutableMapOf<String, Int>()
 
@@ -57,6 +61,16 @@ class ShaderPipeline {
         if (comparisonProgram != 0) count++
         if (outputProgram != 0) count++
         return count
+    }
+
+    fun setCameraSize(width: Int, height: Int) {
+        if (cameraWidth == width && cameraHeight == height) return
+        DebugLog.log("PIPE", "setCameraSize: ${width}x${height}")
+        cameraWidth = width
+        cameraHeight = height
+        // Force FBO recreation at new size
+        fboWidth = 0
+        fboHeight = 0
     }
 
     fun init() {
@@ -87,6 +101,7 @@ class ShaderPipeline {
             GLES30.glDeleteTextures(3, fboTextureIds, 0)
         }
 
+        DebugLog.log("FBO", "creating FBOs at ${width}x${height}")
         // Create 3 FBOs for the 3-pass pipeline
         for (i in 0 until 3) {
             fboTextureIds[i] = createTexture(width, height)
@@ -104,26 +119,34 @@ class ShaderPipeline {
         comparisonSplit: Float,
         flipX: Int
     ) {
-        setupFramebuffers(width, height)
+        // FBOs use camera resolution (not surface) to avoid stretching
+        val fbW = if (cameraWidth > 0 && cameraHeight > 0) cameraWidth else width
+        val fbH = if (cameraWidth > 0 && cameraHeight > 0) cameraHeight else height
+        setupFramebuffers(fbW, fbH)
 
-        GLES30.glViewport(0, 0, width, height)
+        // All FBO passes render at camera resolution
+        GLES30.glViewport(0, 0, fbW, fbH)
 
         if (comparisonMode) {
-            renderComparison(cameraTextureId, textureMatrix, width, height, params, comparisonSplit, flipX)
+            renderComparison(cameraTextureId, textureMatrix, fbW, fbH, width, height, params, comparisonSplit, flipX)
         } else {
-            renderProcessed(cameraTextureId, textureMatrix, width, height, params, flipX)
+            renderProcessed(cameraTextureId, textureMatrix, fbW, fbH, width, height, params, flipX)
         }
     }
 
     private fun renderProcessed(
         cameraTextureId: Int,
         textureMatrix: FloatArray,
-        width: Int,
-        height: Int,
+        fbW: Int,
+        fbH: Int,
+        surfW: Int,
+        surfH: Int,
         params: CreatorEngine,
         flipX: Int
     ) {
-        // Pass 1: Tone Mapping (camera OES -> FBO 0)
+        val flipXf = if (flipX == 1) 1.0f else 0.0f
+
+        // Pass 1: Tone Mapping (camera OES -> FBO 0) — includes flipX
         renderToFBO(
             program = toneMappingProgram,
             fboIndex = 0,
@@ -133,6 +156,7 @@ class ShaderPipeline {
         ) {
             GLES30.glUniform1f(getLoc(toneMappingProgram, "uExposure"), params.exposure)
             GLES30.glUniform1f(getLoc(toneMappingProgram, "uToneMappingStrength"), params.toneMappingStrength)
+            GLES30.glUniform1f(getLoc(toneMappingProgram, "uFlipX"), flipXf)
         }
 
         // Pass 2: Color Profile (FBO 0 -> FBO 1)
@@ -162,29 +186,28 @@ class ShaderPipeline {
             GLES30.glUniform1f(getLoc(skinEnhanceProgram, "uVignette"), params.vignette)
             GLES30.glUniform1f(getLoc(skinEnhanceProgram, "uGlow"), params.glow)
             GLES30.glUniform1f(getLoc(skinEnhanceProgram, "uSharpness"), params.sharpness)
-            GLES30.glUniform2f(getLoc(skinEnhanceProgram, "uResolution"), width.toFloat(), height.toFloat())
+            GLES30.glUniform2f(getLoc(skinEnhanceProgram, "uResolution"), fbW.toFloat(), fbH.toFloat())
             GLES30.glUniform1f(getLoc(skinEnhanceProgram, "uTime"), time)
         }
 
-        // Pass 4: Output to screen (FBO 2 -> default framebuffer)
-        renderToScreen(
-            program = outputProgram,
-            inputTexture = fboTextureIds[2]
-        ) {
-            GLES30.glUniform1i(getLoc(outputProgram, "uFlipX"), flipX)
-        }
+        // Final blit: FBO 2 -> screen with aspect-ratio-corrected viewport
+        blitToScreen(surfW, surfH, fbW, fbH, outputProgram, fboTextureIds[2])
     }
 
     private fun renderComparison(
         cameraTextureId: Int,
         textureMatrix: FloatArray,
-        width: Int,
-        height: Int,
+        fbW: Int,
+        fbH: Int,
+        surfW: Int,
+        surfH: Int,
         params: CreatorEngine,
         comparisonSplit: Float,
         flipX: Int
     ) {
-        // Pass 1: Tone Mapping -> FBO 0
+        val flipXf = if (flipX == 1) 1.0f else 0.0f
+
+        // Pass 1: Tone Mapping -> FBO 0 (includes flipX)
         renderToFBO(
             program = toneMappingProgram,
             fboIndex = 0,
@@ -194,6 +217,7 @@ class ShaderPipeline {
         ) {
             GLES30.glUniform1f(getLoc(toneMappingProgram, "uExposure"), params.exposure)
             GLES30.glUniform1f(getLoc(toneMappingProgram, "uToneMappingStrength"), params.toneMappingStrength)
+            GLES30.glUniform1f(getLoc(toneMappingProgram, "uFlipX"), flipXf)
         }
 
         // Pass 2: Color Profile -> FBO 1
@@ -223,16 +247,53 @@ class ShaderPipeline {
             GLES30.glUniform1f(getLoc(skinEnhanceProgram, "uVignette"), params.vignette)
             GLES30.glUniform1f(getLoc(skinEnhanceProgram, "uGlow"), params.glow)
             GLES30.glUniform1f(getLoc(skinEnhanceProgram, "uSharpness"), params.sharpness)
-            GLES30.glUniform2f(getLoc(skinEnhanceProgram, "uResolution"), width.toFloat(), height.toFloat())
+            GLES30.glUniform2f(getLoc(skinEnhanceProgram, "uResolution"), fbW.toFloat(), fbH.toFloat())
             GLES30.glUniform1f(getLoc(skinEnhanceProgram, "uTime"), time)
         }
 
-        // Pass 4: Comparison output to screen
+        // Final blit: comparison pass to screen with aspect-ratio-corrected viewport
+        blitComparisonToScreen(surfW, surfH, fbW, fbH, cameraTextureId, textureMatrix, comparisonSplit, flipXf)
+    }
+
+    /**
+     * Blit a single 2D texture to screen with aspect-ratio-corrected viewport.
+     * Maintains camera's aspect ratio — adds letterbox/pillarbox as needed.
+     */
+    private fun blitToScreen(
+        surfaceW: Int, surfaceH: Int,
+        contentW: Int, contentH: Int,
+        program: Int, textureId: Int
+    ) {
+        val vp = calculateViewport(surfaceW, surfaceH, contentW, contentH)
+
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+        GLES30.glViewport(vp[0], vp[1], vp[2], vp[3])
+        GLES30.glClearColor(0f, 0f, 0f, 1f)
         GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
+
+        drawQuadSimple(program, textureId)
+    }
+
+    /**
+     * Blit comparison (original OES + processed 2D) to screen with corrected viewport.
+     */
+    private fun blitComparisonToScreen(
+        surfaceW: Int, surfaceH: Int,
+        contentW: Int, contentH: Int,
+        cameraTextureId: Int,
+        textureMatrix: FloatArray,
+        comparisonSplit: Float,
+        flipXf: Float
+    ) {
+        val vp = calculateViewport(surfaceW, surfaceH, contentW, contentH)
+
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+        GLES30.glViewport(vp[0], vp[1], vp[2], vp[3])
+        GLES30.glClearColor(0f, 0f, 0f, 1f)
+        GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
+
         GLES30.glUseProgram(comparisonProgram)
 
-        // Set attributes — MUST use glGetAttribLocation for vertex attributes
         val posLoc = GLES30.glGetAttribLocation(comparisonProgram, "aPosition")
         val texLoc = GLES30.glGetAttribLocation(comparisonProgram, "aTexCoord")
         GLES30.glEnableVertexAttribArray(posLoc)
@@ -243,22 +304,77 @@ class ShaderPipeline {
         GLES30.glVertexAttribPointer(texLoc, 2, GLES30.GL_FLOAT, false, 16, vertexBuffer)
         vertexBuffer.position(0)
 
-        // Bind OES texture to unit 0 (original)
+        // Bind OES texture to unit 0 (original) with flipX
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
         GLES30.glBindTexture(OES_TARGET, cameraTextureId)
         GLES30.glUniform1i(getLoc(comparisonProgram, "uOriginalTexture"), 0)
         GLES30.glUniformMatrix4fv(getLoc(comparisonProgram, "uTextureMatrix"), 1, false, textureMatrix, 0)
 
-        // Bind processed texture to unit 1 (2D)
+        // Bind processed texture to unit 1 (2D, already flipped in pass 1)
         GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, fboTextureIds[2])
         GLES30.glUniform1i(getLoc(comparisonProgram, "uProcessedTexture"), 1)
 
-        // Reset to unit 0
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
 
         GLES30.glUniform1f(getLoc(comparisonProgram, "uSplitPosition"), comparisonSplit)
-        GLES30.glUniform1i(getLoc(comparisonProgram, "uFlipX"), flipX)
+        GLES30.glUniform1f(getLoc(comparisonProgram, "uFlipX"), flipXf)
+
+        GLES30.glDrawArrays(GLES30.GL_TRIANGLE_STRIP, 0, 4)
+
+        GLES30.glDisableVertexAttribArray(posLoc)
+        GLES30.glDisableVertexAttribArray(texLoc)
+    }
+
+    /**
+     * Calculate viewport that fits content (camera) into surface without stretching.
+     * Returns [x, y, width, height].
+     */
+    private fun calculateViewport(surfaceW: Int, surfaceH: Int, contentW: Int, contentH: Int): IntArray {
+        val contentAspect = contentW.toFloat() / contentH.toFloat()
+        val surfaceAspect = surfaceW.toFloat() / surfaceH.toFloat()
+
+        val vpW: Int
+        val vpH: Int
+        val vpX: Int
+        val vpY: Int
+
+        if (surfaceAspect > contentAspect) {
+            // Surface is wider than content — pillarbox (black bars left/right)
+            vpW = (surfaceH * contentAspect).toInt()
+            vpH = surfaceH
+            vpX = (surfaceW - vpW) / 2
+            vpY = 0
+        } else {
+            // Surface is taller than content — letterbox (black bars top/bottom)
+            vpW = surfaceW
+            vpH = (surfaceW / contentAspect).toInt()
+            vpX = 0
+            vpY = (surfaceH - vpH) / 2
+        }
+
+        return intArrayOf(vpX, vpY, vpW, vpH)
+    }
+
+    /**
+     * Simple quad draw for a single 2D texture (no texture matrix, no extra uniforms).
+     */
+    private fun drawQuadSimple(program: Int, textureId: Int) {
+        GLES30.glUseProgram(program)
+
+        val posLoc = GLES30.glGetAttribLocation(program, "aPosition")
+        val texLoc = GLES30.glGetAttribLocation(program, "aTexCoord")
+        GLES30.glEnableVertexAttribArray(posLoc)
+        GLES30.glEnableVertexAttribArray(texLoc)
+        vertexBuffer.position(0)
+        GLES30.glVertexAttribPointer(posLoc, 2, GLES30.GL_FLOAT, false, 16, vertexBuffer)
+        vertexBuffer.position(2)
+        GLES30.glVertexAttribPointer(texLoc, 2, GLES30.GL_FLOAT, false, 16, vertexBuffer)
+        vertexBuffer.position(0)
+
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, textureId)
+        GLES30.glUniform1i(getLoc(program, "uTexture"), 0)
 
         GLES30.glDrawArrays(GLES30.GL_TRIANGLE_STRIP, 0, 4)
 
@@ -282,18 +398,6 @@ class ShaderPipeline {
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
     }
 
-    private fun renderToScreen(
-        program: Int,
-        inputTexture: Int,
-        inputTextureTarget: Int = GLES30.GL_TEXTURE_2D,
-        uniformSetup: () -> Unit = {}
-    ) {
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
-        GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
-
-        drawQuad(program, inputTexture, inputTextureTarget, null, uniformSetup)
-    }
-
     private fun drawQuad(
         program: Int,
         textureId: Int,
@@ -303,7 +407,6 @@ class ShaderPipeline {
     ) {
         GLES30.glUseProgram(program)
 
-        // CRITICAL: attributes must use glGetAttribLocation, NOT glGetUniformLocation!
         val posLoc = GLES30.glGetAttribLocation(program, "aPosition")
         val texLoc = GLES30.glGetAttribLocation(program, "aTexCoord")
         GLES30.glEnableVertexAttribArray(posLoc)
@@ -314,7 +417,6 @@ class ShaderPipeline {
         GLES30.glVertexAttribPointer(texLoc, 2, GLES30.GL_FLOAT, false, 16, vertexBuffer)
         vertexBuffer.position(0)
 
-        // Uniforms use glGetUniformLocation (correct)
         val texUniform = getLoc(program, "uTexture")
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
         GLES30.glBindTexture(textureTarget, textureId)

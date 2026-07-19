@@ -31,6 +31,8 @@ class GLRenderer : GLSurfaceView.Renderer {
 
     private var surfaceWidth = 0
     private var surfaceHeight = 0
+    private var cameraPreviewWidth = 0
+    private var cameraPreviewHeight = 0
     private var frameAvailable = false
     private val frameLock = Object()
     private val logMessages = java.util.concurrent.ConcurrentLinkedQueue<String>()
@@ -54,6 +56,18 @@ class GLRenderer : GLSurfaceView.Renderer {
     fun setComparisonSplit(position: Float) { comparisonSplitRef.set(position.coerceIn(0f, 1f)) }
     fun setFlipX(flip: Int) { flipXRef.set(flip) }
     fun getCameraSurfaceTexture(): SurfaceTexture? = cameraSurfaceTexture
+
+    /**
+     * Set the camera preview resolution. FBOs will be created at this size
+     * to avoid aspect ratio stretching.
+     */
+    fun setCameraPreviewSize(width: Int, height: Int) {
+        if (cameraPreviewWidth == width && cameraPreviewHeight == height) return
+        log("setCameraPreviewSize: ${width}x${height}")
+        cameraPreviewWidth = width
+        cameraPreviewHeight = height
+        pipeline.setCameraSize(width, height)
+    }
 
     // Called from camera thread when new frame is available
     fun onCameraFrameAvailable() {
@@ -109,6 +123,11 @@ class GLRenderer : GLSurfaceView.Renderer {
         pipeline.init()
         log("  [5/8] OK - ${pipeline.getProgramCount()} programs compiled")
 
+        // If camera preview size was set before GL was ready, apply it now
+        if (cameraPreviewWidth > 0 && cameraPreviewHeight > 0) {
+            pipeline.setCameraSize(cameraPreviewWidth, cameraPreviewHeight)
+        }
+
         log("  [6/8] notifying onSurfaceTextureReady callback...")
         val st = cameraSurfaceTexture
         if (st != null && onSurfaceTextureReady != null) {
@@ -137,8 +156,8 @@ class GLRenderer : GLSurfaceView.Renderer {
         log(">>> onSurfaceChanged($width x $height)")
         surfaceWidth = width
         surfaceHeight = height
-        GLES30.glViewport(0, 0, width, height)
-        log("<<< onSurfaceChanged() done, viewport set")
+        // Don't set viewport here — pipeline.render() handles it with aspect ratio correction
+        log("<<< onSurfaceChanged() done")
     }
 
     override fun onDrawFrame(gl: GL10?) {
@@ -176,13 +195,12 @@ class GLRenderer : GLSurfaceView.Renderer {
 
         // Periodic diagnostics every 60 frames (~2 sec)
         if (drawFrameCount % 60 == 1) {
-            log("HEARTBEAT draw=$drawFrameCount w=$surfaceWidth h=$surfaceHeight tex=$cameraTextureId st=${cameraSurfaceTexture != null} data=$framesWithCameraData avail=$frameAvailable")
+            log("HEARTBEAT draw=$drawFrameCount surf=${surfaceWidth}x${surfaceHeight} cam=${cameraPreviewWidth}x${cameraPreviewHeight} tex=$cameraTextureId st=${cameraSurfaceTexture != null} data=$framesWithCameraData flipX=${flipXRef.get()}")
         }
 
         if (surfaceWidth <= 0 || surfaceHeight <= 0) return
 
         // === NORMAL PIPELINE RENDER ===
-        // (test pattern removed — GL confirmed working, camera frames flowing)
         val params = paramsRef.get()
         pipeline.render(
             cameraTextureId = cameraTextureId,

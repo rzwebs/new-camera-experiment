@@ -32,6 +32,7 @@ object Shaders {
     // Pass 1: Tone mapping (ACES filmic + exposure)
     // Input: OES camera texture
     // Output: FBO
+    // uFlipX: 0.0 = no flip, 1.0 = mirror horizontally (front camera)
     const val TONE_MAPPING_FRAG = """
         #version 300 es
         #extension GL_OES_EGL_image_external_essl3 : require
@@ -42,6 +43,7 @@ object Shaders {
         uniform mat4 uTextureMatrix;
         uniform float uExposure;
         uniform float uToneMappingStrength;
+        uniform float uFlipX;
 
         vec3 ACESFilm(vec3 x) {
             float a = 2.51;
@@ -54,7 +56,10 @@ object Shaders {
 
         void main() {
             vec4 coord = uTextureMatrix * vec4(vTexCoord, 0.0, 1.0);
-            vec3 color = texture(uTexture, coord.xy).rgb;
+            vec2 tc = coord.xy;
+            // Horizontal flip for front camera (mirror mode)
+            tc.x = mix(tc.x, 1.0 - tc.x, uFlipX);
+            vec3 color = texture(uTexture, tc).rgb;
             color *= pow(2.0, uExposure);
             vec3 tonemapped = ACESFilm(color);
             color = mix(color, tonemapped, uToneMappingStrength);
@@ -77,7 +82,6 @@ object Shaders {
         uniform float uShadowRecovery;
 
         vec3 applyTemperature(vec3 c, float temp) {
-            // temp 0=cool (blue shift), 1=warm (orange shift)
             vec3 warm = vec3(1.05, 0.97, 0.88);
             vec3 cool = vec3(0.92, 0.97, 1.08);
             vec3 shift = mix(cool, warm, temp);
@@ -89,16 +93,12 @@ object Shaders {
             return mix(vec3(lum), c, sat);
         }
 
-        // S-curve contrast
         vec3 sCurve(vec3 c, float amount) {
-            // amount: -1 to 1
             float a = amount * 2.5;
             vec3 result;
-            // Use a simple sigmoid-like S-curve
             result.r = 0.5 + 0.5 * tanh(a * (c.r - 0.5));
             result.g = 0.5 + 0.5 * tanh(a * (c.g - 0.5));
             result.b = 0.5 + 0.5 * tanh(a * (c.b - 0.5));
-            // Blend with original based on amount
             return mix(c, result, abs(amount));
         }
 
@@ -133,8 +133,6 @@ object Shaders {
 
     // Pass 3: Skin processing + cinematic effects
     // Input: 2D texture from FBO
-    // Applies: skin tone protection (reduces processing artifacts on skin),
-    //          film grain, vignette, glow, sharpness
     const val SKIN_ENHANCE_FRAG = """
         #version 300 es
         precision highp float;
@@ -149,16 +147,14 @@ object Shaders {
         uniform vec2 uResolution;
         uniform float uTime;
 
-        // Simplified skin tone detection in RGB
         float isSkinTone(vec3 c) {
             float r = c.r, g = c.g, b = c.b;
             float maxC = max(r, max(g, b));
             float minC = min(r, min(g, b));
-            // Skin: R dominant, warm, not too dark or saturated
             bool rule1 = r > 0.35 && g > 0.15 && b > 0.05;
             bool rule2 = r > g && (r - g) > 0.04;
             bool rule3 = maxC - minC > 0.03 && maxC - minC < 0.5;
-            bool rule4 = r < 0.95; // not clipped
+            bool rule4 = r < 0.95;
             return (rule1 && rule2 && rule3 && rule4) ? 1.0 : 0.0;
         }
 
@@ -170,14 +166,11 @@ object Shaders {
             vec3 color = texture(uTexture, vTexCoord).rgb;
             vec2 texel = 1.0 / uResolution;
 
-            // Skin protection: reduce contrast on skin tones
             float skin = isSkinTone(color);
-            // On skin areas, we push slightly toward neutral to prevent over-processing
             float skinLum = dot(color, vec3(0.2126, 0.7152, 0.0722));
-            vec3 neutralSkin = vec3(skinLum) * vec3(1.0, 0.85, 0.75); // warm neutral
+            vec3 neutralSkin = vec3(skinLum) * vec3(1.0, 0.85, 0.75);
             color = mix(color, mix(color, neutralSkin, 0.15), skin * uSkinProtection);
 
-            // Glow (simple bloom approximation)
             if (uGlow > 0.01) {
                 vec3 glowSample = vec3(0.0);
                 float glowRadius = 4.0;
@@ -189,22 +182,18 @@ object Shaders {
                     }
                 }
                 glowSample /= 25.0;
-                // Only add glow to bright areas
                 float lum = dot(color, vec3(0.2126, 0.7152, 0.0722));
                 float glowMask = smoothstep(0.4, 0.9, lum);
                 color = mix(color, color + glowSample * 0.3, uGlow * glowMask);
             }
 
-            // Film grain
             if (uFilmGrain > 0.01) {
                 float grain = (hash(vTexCoord * uResolution + fract(uTime)) - 0.5) * uFilmGrain * 0.06;
                 color += grain;
             }
 
-            // Vignette
             if (uVignette > 0.01) {
                 vec2 uv = vTexCoord * 2.0 - 1.0;
-                // Adjust for aspect ratio
                 uv.x *= uResolution.x / uResolution.y;
                 float vig = 1.0 - dot(uv, uv) * uVignette * 0.8;
                 vig = clamp(vig, 0.0, 1.0);
@@ -217,6 +206,7 @@ object Shaders {
 
     // Final pass: comparison mode - left=original, right=processed
     // Uses both OES texture (original) and 2D texture (processed)
+    // uFlipX is applied ONLY to the original OES texture (processed is already flipped in pass 1)
     const val COMPARISON_FRAG = """
         #version 300 es
         #extension GL_OES_EGL_image_external_essl3 : require
@@ -226,28 +216,26 @@ object Shaders {
         uniform samplerExternalOES uOriginalTexture;
         uniform sampler2D uProcessedTexture;
         uniform mat4 uTextureMatrix;
-        uniform float uSplitPosition; // 0.0-1.0, where to split
-        uniform int uFlipX; // 1 for front camera mirror
+        uniform float uSplitPosition;
+        uniform float uFlipX;
 
         void main() {
             vec2 coord = vTexCoord;
-            // Flip X for front camera
-            if (uFlipX == 1) {
-                coord.x = 1.0 - coord.x;
-            }
 
             vec3 original;
             vec3 processed;
 
-            // Sample original (OES texture)
-            vec4 oesCoord = uTextureMatrix * vec4(coord, 0.0, 1.0);
+            // Sample original (OES texture) — apply flip for front camera
+            vec2 origCoord = coord;
+            origCoord.x = mix(origCoord.x, 1.0 - origCoord.x, uFlipX);
+            vec4 oesCoord = uTextureMatrix * vec4(origCoord, 0.0, 1.0);
             original = texture(uOriginalTexture, oesCoord.xy).rgb;
 
-            // Sample processed (2D texture)
+            // Sample processed (2D texture) — already flipped in pass 1, no flip needed
             processed = texture(uProcessedTexture, coord).rgb;
 
-            // Split
-            float splitX = uFlipX == 1 ? (1.0 - uSplitPosition) : uSplitPosition;
+            // Split position accounts for mirror
+            float splitX = uFlipX > 0.5 ? (1.0 - uSplitPosition) : uSplitPosition;
             if (coord.x < splitX) {
                 fragColor = vec4(original, 1.0);
             } else {
@@ -262,21 +250,16 @@ object Shaders {
         }
     """
 
-    // Standard 2D texture output pass (non-comparison)
+    // Standard 2D texture output pass (non-comparison, no flip — already applied in pass 1)
     const val OUTPUT_FRAG = """
         #version 300 es
         precision highp float;
         in vec2 vTexCoord;
         out vec4 fragColor;
         uniform sampler2D uTexture;
-        uniform int uFlipX;
 
         void main() {
-            vec2 coord = vTexCoord;
-            if (uFlipX == 1) {
-                coord.x = 1.0 - coord.x;
-            }
-            vec3 color = texture(uTexture, coord).rgb;
+            vec3 color = texture(uTexture, vTexCoord).rgb;
             fragColor = vec4(color, 1.0);
         }
     """

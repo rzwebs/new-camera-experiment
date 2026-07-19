@@ -64,6 +64,10 @@ class GLPreviewView @JvmOverloads constructor(
 
     fun getRenderer(): GLRenderer? = renderer
 
+    fun setCameraPreviewSize(width: Int, height: Int) {
+        renderer?.setCameraPreviewSize(width, height)
+    }
+
     fun release() {
         DebugLog.log("VIEW", "release() called")
         renderer = null

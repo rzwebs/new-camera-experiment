@@ -20,6 +20,9 @@ class CameraManager(private val context: Context) {
     private var handler: Handler? = null
     private val logMessages = ConcurrentLinkedQueue<String>()
 
+    /** Called with the chosen preview size (width, height) after camera opens. */
+    var onPreviewSizeSelected: ((Int, Int) -> Unit)? = null
+
     fun getLogMessages(): List<String> = logMessages.toList()
 
     private fun log(msg: String) {
@@ -60,6 +63,9 @@ class CameraManager(private val context: Context) {
             val sizes = configMap.getOutputSizes(SurfaceTexture::class.java)
             val previewSize = chooseOptimalSize(sizes, 720, 1280)
             log("step 5 done: preview ${previewSize.width}x${previewSize.height}")
+
+            // Report chosen preview size to GL pipeline
+            onPreviewSizeSelected?.invoke(previewSize.width, previewSize.height)
 
             log("step 6: setDefaultBufferSize on SurfaceTexture")
             surfaceTexture.setDefaultBufferSize(previewSize.width, previewSize.height)

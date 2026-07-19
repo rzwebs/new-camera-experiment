@@ -65,6 +65,9 @@ fun CameraScreen(
     var cameraStarted by remember { mutableStateOf(false) }
     var showDebug by remember { mutableStateOf(true) }
 
+    // Hold reference to GLPreviewView for passing camera size
+    var glPreviewView by remember { mutableStateOf<com.aicreatorlens.app.gl.GLPreviewView?>(null) }
+
     // SurfaceTexture callback from GL
     val onSurfaceTextureReady: (android.graphics.SurfaceTexture) -> Unit = remember(cameraStarted) {
         { surfaceTexture ->
@@ -75,6 +78,11 @@ fun CameraScreen(
                 DebugLog.log("APP", "BLOCKED: camera already started")
             } else {
                 DebugLog.log("APP", ">>> Starting camera with SurfaceTexture...")
+                // Wire preview size callback before starting camera
+                cameraManager.onPreviewSizeSelected = { w, h ->
+                    DebugLog.log("APP", "Camera preview size: ${w}x${h}, passing to GL")
+                    glPreviewView?.setCameraPreviewSize(w, h)
+                }
                 cameraManager.startCamera(surfaceTexture)
                 cameraStarted = true
                 DebugLog.log("APP", "<<< cameraManager.startCamera() returned")
@@ -106,6 +114,7 @@ fun CameraScreen(
                         DebugLog.log("UI", ">>> GLPreviewView callback -> onSurfaceTextureReady")
                         onSurfaceTextureReady(st)
                     }
+                    glPreviewView = view
                     DebugLog.log("UI", "<<< AndroidView factory DONE")
                     view
                 },
